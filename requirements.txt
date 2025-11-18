@@ -1,4 +1,4 @@
-python-telegram-bot[job-queue]==20.7
+python-telegram-bot[job-queue]==21.7
 aiohttp==3.9.5
 python-dotenv==1.0.1
 nest-asyncio==1.6.0
