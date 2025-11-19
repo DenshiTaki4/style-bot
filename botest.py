@@ -55,7 +55,7 @@ users_waiting = {}
 reminder_state = {
     "delete_date": None,   # date
     "text": ("⚠️ Удаление из канала {delete_date} (через {days_left} дн.). "
-             "Не потеряй доступ: оформи подписку и подай заявку: {link}"),
+            "Не потеряй доступ: оформи подписку и подай заявку: {link}"),
     "link": None,          # актуальная join-request ссылка на 2 часа
     "link_expire_ts": 0,   # unix ts
 }
@@ -68,32 +68,26 @@ subscription_config = {
 
 def _calc_end_date(today: date) -> date:
     """
-    Считает дату окончания подписки по правилу:
-    - если сегодня <= end_day → конец текущего месяца на end_day
-    - если сегодня > end_day → end_day следующего месяца
-    end_day можно менять через /set_end_day.
+    Дата окончания подписки:
+    всегда end_day следующего месяца.
     """
     end_day = subscription_config.get("end_day", 20)
 
-    # небольшие ограничения, чтобы не ловить проблемы с количеством дней в месяце
+    # ограничение на день, чтобы не было проблем с короткими месяцами
     if end_day < 1:
         end_day = 1
     if end_day > 28:
-        end_day = 28  # безопасно для всех месяцев
+        end_day = 28
 
-    if today.day <= end_day:
-        target_year = today.year
-        target_month = today.month
+    # 👉 ВСЕГДА следующий месяц
+    if today.month == 12:
+        target_year = today.year + 1
+        target_month = 1
     else:
-        if today.month == 12:
-            target_year = today.year + 1
-            target_month = 1
-        else:
-            target_year = today.year
-            target_month = today.month + 1
+        target_year = today.year
+        target_month = today.month + 1
 
     return date(target_year, target_month, end_day)
-
 # ---- env ----
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -1121,7 +1115,7 @@ async def remind_unpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     headers, data = rows[0], rows[1:]
-    i_uid = _find_col("user_id")
+    i_uid = _find_col("user_id")_ensure_campaign_link
     i_pu = _find_col("дата_окончания")
     if i_uid is None or i_pu is None:
         await update.message.reply_text("Нужны колонки: user_id, дата_окончания.")
