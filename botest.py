@@ -1115,7 +1115,7 @@ async def remind_unpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     headers, data = rows[0], rows[1:]
-    i_uid = _find_col("user_id")_ensure_campaign_link
+    i_uid = _find_col("user_id")
     i_pu = _find_col("дата_окончания")
     if i_uid is None or i_pu is None:
         await update.message.reply_text("Нужны колонки: user_id, дата_окончания.")
@@ -1190,7 +1190,15 @@ async def remind_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     delete_date = reminder_state["delete_date"]
     days_left = _days_left(delete_date)
-    link = await _ensure_campaign_link(context.bot, ttl_seconds=2 * 3600)
+
+    # создаём join-request ссылку на 2 часа
+    inv = await context.bot.create_chat_invite_link(
+        chat_id=CHANNEL_ID,
+        creates_join_request=True,
+        expire_date=int(datetime.utcnow().timestamp()) + 2 * 3600,
+        name=f"remind_all_{int(datetime.utcnow().timestamp())}",
+    )
+    link = inv.invite_link
 
     try:
         rows = sheet.get_all_values()
@@ -1250,6 +1258,7 @@ async def remind_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except TelegramError as e:
             log.warning("reminder(all) to %s failed: %s", uid, e)
             failed += 1
+
         if idx % 12 == 0:
             await sleep(1.0)
 
@@ -1257,6 +1266,7 @@ async def remind_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ADMIN_ID,
         f"✅ Напоминание всем отправлено.\nОтправлено: {sent}\nОшибок: {failed}\nВсего: {len(targets)}"
     )
+
 
 # ===================== ERROR & HEALTH =====================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
