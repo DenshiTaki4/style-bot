@@ -1,21 +1,3 @@
-# file: bot/main.py
-# -*- coding: utf-8 -*-
-# """
-# Бот для платного канала (стейдж/прод):
-
-# — Таблица со строкой заголовков (РУ):
-#   user_id | username | дата_оплаты | дата_окончания | notified | статус | full_name | phone_number | in_channel
-
-# — Функционал:
-#   • Апрув оплаты → UPSERT по user_id в таблицу (без дублей) + персональная join-request ссылка (на 1 час)
-#   • Gatekeeper: в канал пускаем только если оплата активна на текущий период
-#   • Ручная чистка /clean: кик у кого макс. «дата_окончания» < первое число текущего месяца + чистка дублей
-#   • Аудит /audit: сверка таблицы и канала, обновление in_channel столбца, отчёт
-#   • Восстановление оплаченных, кто не в канале /restore_paid_absent
-#   • Удаление дублей строк /purge_dups
-#   • Рассылки: /broadcast, /broadcast_paid_absent, /broadcast_link (единая ссылка на 2 часа)
-#   • Напоминания к дате удаления: /set_delete_date, /set_reminder_text, /remind_unpaid, /remind_all
-# """
 import os
 import json
 import logging
@@ -71,7 +53,7 @@ def _calc_end_date(today: date) -> date:
     Дата окончания подписки:
     всегда end_day следующего месяца.
     """
-    end_day = subscription_config.get("end_day", 20)
+    end_day = subscription_config.get("end_day", 23)
 
     # ограничение на день, чтобы не было проблем с короткими месяцами
     if end_day < 1:
@@ -187,6 +169,27 @@ def _write_row_by_headers(row_dict: dict) -> list[str]:
     return [row_dict.get(h, "") for h in headers]
 
 # ===================== HELPERS =====================
+
+def _find_row_by_user_id(uid: int) -> int | None:
+    """
+    Возвращает номер строки (1-based) где user_id == uid, иначе None.
+    Ищет строго по колонке user_id.
+    """
+    col0 = _find_col("user_id")
+    if col0 is None:
+        return None
+
+    col = col0 + 1  # в gspread колонки 1-based
+    values = sheet.col_values(col)  # включает заголовок в первой строке
+
+    target = str(uid).strip()
+    for i, v in enumerate(values, start=1):
+        if i == 1:  # header
+            continue
+        if str(v).strip() == target:
+            return i
+    return None
+
 def _nice(d: date | datetime | None) -> str:
     if not d:
         return "-"
@@ -223,15 +226,19 @@ def _days_left(delete_date: date) -> int:
 
 
 async def send_invite_link_safely(context: ContextTypes.DEFAULT_TYPE, target_id: int, link: str) -> bool:
+    """Отправляет пользователю подтверждение с фиксированной датой 23.01.2026."""
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Kanala katıl", url=link)]])
     try:
         msg = await context.bot.send_message(
             chat_id=target_id,
-            text=
-                "❣️ Ödemen onaylandı!\n"
-    "Ödemen onaylandıktan sonra kanal katıl butonuna basmayı unutma.🌿",
+            text=(
+                "❣️ Ödemen onaylandı!\n\n"
+                "Aboneliğin **23.01.2026** tarihine kadar uzatıldı. 🌿\n"
+                "Kanal katıl butonuna basmayı unutma. ✨"
+            ),
             reply_markup=kb,
             disable_web_page_preview=True,
+            parse_mode="Markdown"
         )
         log.info("Invite button sent to user_id=%s, msg_id=%s", target_id, msg.message_id)
         return True
@@ -241,7 +248,7 @@ async def send_invite_link_safely(context: ContextTypes.DEFAULT_TYPE, target_id:
     except TelegramError:
         log.exception("Failed to deliver invite link to %s", target_id)
         return False
-
+    
 # ===================== USER FLOW =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -261,11 +268,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
     user_id = user.id
+    
+    # Сохраняем актуальные данные пользователя в оперативную память
     username = user.username or f"id{user_id}"
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-    language = user.language_code or ""
-
-    users_waiting[user_id] = {"username": username, "full_name": full_name, "language": language}
+    users_waiting[user_id] = {
+        "username": username, 
+        "full_name": full_name, 
+        "language": user.language_code or ""
+    }
+    
     await query.answer()
 
     if query.data == "pay":
@@ -274,10 +286,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💸 Lütfen 200₺ şu karta gönderin:\n\n"
             "Gülden Koçkirli\n"
             "TR 2500 0100 2571 9458 6967 5002\n\n"
-            "Ödeme yaptıktan sonra ✅ÖDEME YAPTIM butonuna basmanız lazım. "
-            "📌 Kanal aboneliğiniz 19.12’ye kadar geçerlidir. 🤍\n\n"
+            "Ödeme yaptıktan sonra ✅ **ÖDEME YAPTIM** butonuna basmanız lazım.\n\n"
+            "📌 Kanal aboneliğiniz **23.01.2026** tarihine kadar geçerli olacaktır. 🤍\n\n"
             "📅 Hangi gün katıldığınız önemli değil — tüm eski içeriklere erişebilirsiniz. ✨",
             reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
         )
 
     elif query.data == "paid":
@@ -346,10 +359,11 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== APPROVAL & UPSERT =====================
 async def _approve_user(context: ContextTypes.DEFAULT_TYPE, target_id: int, reply_chat_id: int | None = None):
-    """UPSERT в таблицу (русские заголовки) + выдача join-request ссылки на 1 час."""
+    """UPSERT в таблицу + бессрочная join-request ссылка (поиск строго по колонке user_id)."""
     now = datetime.now(timezone.utc)
     today = now.date()
-    end_date = _calc_end_date(today)
+
+    fixed_end_date_str = "23.01.2026"
 
     user_info = users_waiting.get(target_id, {})
     raw_username = user_info.get("username") or ""
@@ -358,61 +372,64 @@ async def _approve_user(context: ContextTypes.DEFAULT_TYPE, target_id: int, repl
 
     _ensure_headers_ru()
 
-    # UPSERT по user_id
+    # --- UPSERT строго по user_id колонке ---
     try:
-        matches = sheet.findall(str(target_id))
         row_dict = {
             "user_id": str(target_id),
             "username": username,
-            "дата_оплаты": today.isoformat(),
-            "дата_окончания": end_date.isoformat(),
+            "дата_оплаты": today.strftime("%d.%m.%Y"),
+            "дата_окончания": fixed_end_date_str,
             "notified": "no",
             "статус": "active",
             "full_name": full_name,
-            "phone_number": ""
+            "phone_number": "",
+            "in_channel": "no"
         }
-        values = _write_row_by_headers(row_dict)
 
+        values = _write_row_by_headers(row_dict)
         headers = sheet.row_values(1)
         last_col = len(headers)
 
-        if matches:
-            r = matches[0].row
-            start_a1 = rowcol_to_a1(r, 1)
-            end_a1 = rowcol_to_a1(r, last_col)
-            rng = f"{start_a1}:{end_a1}"
-            sheet.update(rng, [values])
+        existing_row = _find_row_by_user_id(target_id)
+
+        if existing_row:
+            start_a1 = rowcol_to_a1(existing_row, 1)
+            end_a1 = rowcol_to_a1(existing_row, last_col)
+            sheet.update(f"{start_a1}:{end_a1}", [values])
+            log.info("UPSERT(update) ok for user %s until %s", target_id, fixed_end_date_str)
         else:
             sheet.append_row(values, value_input_option="USER_ENTERED")
+            log.info("UPSERT(insert) ok for user %s until %s", target_id, fixed_end_date_str)
 
-        log.info("UPSERT ok RU for user %s until %s", target_id, row_dict["дата_окончания"])
     except Exception as e:
-        log.exception("Failed to upsert subscriber RU: %s", e)
+        log.exception("Failed to upsert subscriber: %s", e)
         if reply_chat_id:
-            await context.bot.send_message(reply_chat_id, "⚠️ Не удалось сохранить запись в таблицу.")
+            await context.bot.send_message(reply_chat_id, f"⚠️ Ошибка при записи в таблицу: {e}")
         return
 
-    # создать join-request ссылку (1 час)
+    # --- БЕССРОЧНАЯ join-request ссылка (без expire_date) ---
+    ok = False
     try:
         inv = await context.bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
-            creates_join_request=True,  # КЛЮЧ — канал одобряет заявку только после проверки
-            expire_date=int(now.timestamp()) + 3600,
-            name=f"approve_{target_id}_{now.isoformat(timespec='seconds')}",
+            creates_join_request=True,
+            name=f"approve_{target_id}"
+            # expire_date УБРАНА -> ссылка не истекает
         )
         ok = await send_invite_link_safely(context, target_id, inv.invite_link)
     except TelegramError:
-        log.exception("Failed to create invite link dynamically")
+        log.exception("Failed to create/send invite link")
         ok = False
 
-    # уведомление админа
+    # --- Ответ админу ---
     if reply_chat_id:
-        nice_end = _nice(end_date)
         if ok:
-            await context.bot.send_message(reply_chat_id, f"✅ {username} одобрен и получил доступ до {nice_end}.")
+            await context.bot.send_message(reply_chat_id, f"✅ {username} одобрен до {fixed_end_date_str}.")
         else:
-            await context.bot.send_message(reply_chat_id, f"⚠️ {username} одобрен, но ссылку не удалось доставить.")
-
+            await context.bot.send_message(
+                reply_chat_id,
+                f"⚠️ {username} одобрен в таблице, но бот не смог отправить ему ссылку (возможно, бот заблокирован)."
+            )
 
 async def admin_approve_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1335,3 +1352,7 @@ if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     _ensure_headers_ru()
     main()
+
+# git add .
+# git commit -m "Updated broadcast version"
+# git push
