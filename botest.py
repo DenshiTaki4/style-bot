@@ -1,3 +1,20 @@
+# file: bot/main.py
+# -*- coding: utf-8 -*-
+# """
+# Бот для платного канала (стейдж/прод):
+
+# — Таблица со строкой заголовков (РУ):
+#   user_id | username | дата_оплаты | дата_окончания | notified | статус | full_name | phone_number | in_channel
+
+# — Функционал:
+#   • Апрув оплаты → UPSERT по user_id в таблицу (без дублей) + персональная join-request ссылка (на 1 час)
+#   • Gatekeeper: в канал пускаем только если оплата активна на текущий период
+#   • Ручная чистка /clean: кик у кого макс. «дата_окончания» < 19 число текущего месяца + чистка дублей
+#   • Аудит /audit: сверка таблицы и канала, обновление in_channel столбца, отчёт
+#   • Удаление дублей строк /purge_dups
+#   • Рассылки: /broadcast, /broadcast_paid_absent, /broadcast_link (единая ссылка на 2 часа)
+#   • Напоминания к дате удаления: /set_delete_date, /set_reminder_text, /remind_unpaid, /remind_all
+# """
 import os
 import json
 import logging
